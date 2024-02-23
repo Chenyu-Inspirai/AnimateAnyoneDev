@@ -11,6 +11,7 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from torch.utils.data.distributed import DistributedSampler
 
 import diffusers
 import mlflow
@@ -33,7 +34,8 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPVisionModelWithProjection
 
-from src.dataset.dance_video import HumanDanceVideoDataset
+# from src.dataset.dance_video import HumanDanceVideoDataset
+from src.dataset.dance_video_aug import HumanDanceVideoAugDataset, HumanDanceVideoAugDatasetCrop
 from src.models.mutual_self_attention import ReferenceAttentionControl
 from src.models.pose_guider import PoseGuider
 from src.models.unet_2d_condition import UNet2DConditionModel
@@ -141,7 +143,7 @@ def log_validation(
     accelerator,
     width,
     height,
-    clip_length=24,
+    clip_length=32,
     generator=None,
 ):
     logger.info("Running validation... ")
@@ -168,13 +170,21 @@ def log_validation(
 
     test_cases = [
         (
-            "./configs/inference/ref_images/anyone-3.png",
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/inference/ref_images/wukong.png",
             "./configs/inference/pose_videos/anyone-video-1_kps.mp4",
         ),
         (
-            "./configs/inference/ref_images/anyone-2.png",
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/inference/ref_images/tommy.png",
             "./configs/inference/pose_videos/anyone-video-2_kps.mp4",
         ),
+        (
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/inference/ref_images/bella_full.jpg",
+            "./configs/inference/pose_videos/anyone-video-2_kps.mp4",
+        ),
+        (
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/inference/ref_images/bella_upper.jpg",
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/inference/pose_videos/pose_upper.mp4"
+        )
     ]
 
     results = []
@@ -224,11 +234,12 @@ def log_validation(
 
 def main(cfg):
     kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
+    mlflow.set_experiment(cfg.exp_name)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.solver.gradient_accumulation_steps,
         mixed_precision=cfg.solver.mixed_precision,
         log_with="mlflow",
-        project_dir="./mlruns",
+        project_dir="./mlruns"+ '/' + cfg.exp_name,
         kwargs_handlers=[kwargs],
     )
 
@@ -416,17 +427,30 @@ def main(cfg):
         num_training_steps=cfg.solver.max_train_steps
         * cfg.solver.gradient_accumulation_steps,
     )
+    
 
-    train_dataset = HumanDanceVideoDataset(
+    train_dataset = HumanDanceVideoAugDatasetCrop(
         width=cfg.data.train_width,
         height=cfg.data.train_height,
         n_sample_frames=cfg.data.n_sample_frames,
         sample_rate=cfg.data.sample_rate,
         img_scale=(1.0, 1.0),
+        img_ratio=(0.9, 1.0),
+        video_scale=(1.0, 1.0),
+        video_ratio=(0.9, 1.0),
         data_meta_paths=cfg.data.meta_paths,
+        background_dir=cfg.data.background_dir
     )
+    
+    # sampler = DistributedSampler(train_dataset, shuffle=True)
+    
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=cfg.data.train_bs, shuffle=True, num_workers=4
+        train_dataset, 
+        batch_size=cfg.data.train_bs, 
+        # sampler=sampler,
+        # shuffle=True, 
+        num_workers=0,
+        # pin_memory=True
     )
 
     # Prepare everything with our `accelerator`.
@@ -457,7 +481,7 @@ def main(cfg):
         run_time = datetime.now().strftime("%Y%m%d-%H%M")
         accelerator.init_trackers(
             exp_name,
-            init_kwargs={"mlflow": {"run_name": run_time}},
+            init_kwargs={"mlflow": {"run_name": cfg.exp_name}},
         )
         # dump config file
         mlflow.log_dict(OmegaConf.to_container(cfg), "config.yaml")
@@ -692,10 +716,10 @@ def main(cfg):
 
             if global_step >= cfg.solver.max_train_steps:
                 break
-        # save model after each epoch
-        if accelerator.is_main_process:
+        # save model after each 10 epoch
+        if accelerator.is_main_process and epoch%5==0:
             save_path = os.path.join(save_dir, f"checkpoint-{global_step}")
-            delete_additional_ckpt(save_dir, 1)
+            delete_additional_ckpt(save_dir, 10)
             accelerator.save_state(save_path)
             # save motion module only
             unwrap_net = accelerator.unwrap_model(net)
@@ -704,7 +728,7 @@ def main(cfg):
                 save_dir,
                 "motion_module",
                 global_step,
-                total_limit=3,
+                total_limit=5,
             )
 
     # Create the pipeline using the trained modules and save it.

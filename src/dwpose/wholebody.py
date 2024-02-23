@@ -8,7 +8,8 @@ import onnxruntime as ort
 from .onnxdet import inference_detector
 from .onnxpose import inference_pose
 
-ModelDataPathPrefix = Path("./pretrained_weights")
+# ModelDataPathPrefix = Path("./pretrained_weights")
+ModelDataPathPrefix = Path("/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/pretrained_weights")
 
 
 class Wholebody:

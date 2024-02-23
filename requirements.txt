@@ -28,3 +28,4 @@ transformers==4.30.2
 mlflow==2.9.2
 xformers==0.0.22
 controlnet-aux==0.0.7
+peft

@@ -321,12 +321,12 @@ class ReferenceAttentionControl:
                 reader_attn_modules = [
                     module
                     for module in torch_dfs(self.unet)
-                    if isinstance(module, TemporalBasicTransformerBlock)
+                    if isinstance(module, TemporalBasicTransformerBlock) or isinstance(module, BasicTransformerBlock)
                 ]
                 writer_attn_modules = [
                     module
                     for module in torch_dfs(writer.unet)
-                    if isinstance(module, BasicTransformerBlock)
+                    if isinstance(module, BasicTransformerBlock) or isinstance(module, TemporalBasicTransformerBlock)
                 ]
             reader_attn_modules = sorted(
                 reader_attn_modules, key=lambda x: -x.norm1.normalized_shape[0]

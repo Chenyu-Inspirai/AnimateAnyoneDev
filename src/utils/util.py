@@ -83,7 +83,7 @@ def save_videos_from_pil(pil_images, path, fps=8):
         raise ValueError("Unsupported file type. Use .mp4 or .gif.")
 
 
-def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=6, fps=8):
+def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=6, fps=16):
     videos = rearrange(videos, "b c t h w -> t b c h w")
     height, width = videos.shape[-2:]
     outputs = []

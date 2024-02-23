@@ -145,8 +145,8 @@ def log_validation(
     vae = vae.to(dtype=torch.float32)
     image_enc = image_enc.to(dtype=torch.float32)
 
-    pose_detector = DWposeDetector()
-    pose_detector.to(accelerator.device)
+    # pose_detector = DWposeDetector()
+    # pose_detector.to(accelerator.device)
 
     pipe = Pose2ImagePipeline(
         vae=vae,
@@ -159,43 +159,51 @@ def log_validation(
     pipe = pipe.to(accelerator.device)
 
     ref_image_paths = [
-        "./configs/inference/ref_images/anyone-2.png",
-        "./configs/inference/ref_images/anyone-3.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_on_bed.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_on_bed.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg"
     ]
     pose_image_paths = [
-        "./configs/inference/pose_images/pose-1.png",
-        "./configs/inference/pose_images/pose-1.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/wake_onbed_0.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/wake_onbed_100.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_160.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_180.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_190.png"
     ]
 
     pil_images = []
-    for ref_image_path in ref_image_paths:
-        for pose_image_path in pose_image_paths:
-            pose_name = pose_image_path.split("/")[-1].replace(".png", "")
-            ref_name = ref_image_path.split("/")[-1].replace(".png", "")
-            ref_image_pil = Image.open(ref_image_path).convert("RGB")
-            pose_image_pil = Image.open(pose_image_path).convert("RGB")
+    for i in range(len(ref_image_paths)):
+        ref_image_path = ref_image_paths[i]
+        pose_image_path = pose_image_paths[i]
+        
+        pose_name = pose_image_path.split("/")[-1].replace(".png", "")
+        ref_name = ref_image_path.split("/")[-1].replace(".png", "")
+        ref_image_pil = Image.open(ref_image_path).convert("RGB")
+        pose_image_pil = Image.open(pose_image_path).convert("RGB")
 
-            image = pipe(
-                ref_image_pil,
-                pose_image_pil,
-                width,
-                height,
-                20,
-                3.5,
-                generator=generator,
-            ).images
-            image = image[0, :, 0].permute(1, 2, 0).cpu().numpy()  # (3, 512, 512)
-            res_image_pil = Image.fromarray((image * 255).astype(np.uint8))
-            # Save ref_image, src_image and the generated_image
-            w, h = res_image_pil.size
-            canvas = Image.new("RGB", (w * 3, h), "white")
-            ref_image_pil = ref_image_pil.resize((w, h))
-            pose_image_pil = pose_image_pil.resize((w, h))
-            canvas.paste(ref_image_pil, (0, 0))
-            canvas.paste(pose_image_pil, (w, 0))
-            canvas.paste(res_image_pil, (w * 2, 0))
+        image = pipe(
+            ref_image_pil,
+            pose_image_pil,
+            width,
+            height,
+            20,
+            3.5,
+            generator=generator,
+        ).images
+        image = image[0, :, 0].permute(1, 2, 0).cpu().numpy()  # (3, 512, 512)
+        res_image_pil = Image.fromarray((image * 255).astype(np.uint8))
+        # Save ref_image, src_image and the generated_image
+        w, h = res_image_pil.size
+        canvas = Image.new("RGB", (w * 3, h), "white")
+        ref_image_pil = ref_image_pil.resize((w, h))
+        pose_image_pil = pose_image_pil.resize((w, h))
+        canvas.paste(ref_image_pil, (0, 0))
+        canvas.paste(pose_image_pil, (w, 0))
+        canvas.paste(res_image_pil, (w * 2, 0))
 
-            pil_images.append({"name": f"{ref_name}_{pose_name}", "img": canvas})
+        pil_images.append({"name": f"{ref_name}_{pose_name}", "img": canvas})
 
     vae = vae.to(dtype=torch.float16)
     image_enc = image_enc.to(dtype=torch.float16)
@@ -235,9 +243,14 @@ def main(cfg):
         seed_everything(cfg.seed)
 
     exp_name = cfg.exp_name
+    exp_name = cfg.exp_name
     save_dir = f"{cfg.output_dir}/{exp_name}"
+    validation_dir = f"{cfg.output_dir}/{exp_name}/validation"
     if accelerator.is_main_process and not os.path.exists(save_dir):
         os.makedirs(save_dir)
+    
+    if accelerator.is_main_process and not os.path.exists(validation_dir):
+        os.makedirs(validation_dir)
 
     if cfg.weight_dtype == "fp16":
         weight_dtype = torch.float16
@@ -276,6 +289,7 @@ def main(cfg):
         },
     ).to(device="cuda")
 
+
     image_enc = CLIPVisionModelWithProjection.from_pretrained(
         cfg.image_encoder_path,
     ).to(dtype=weight_dtype, device="cuda")
@@ -284,33 +298,51 @@ def main(cfg):
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320, block_out_channels=(16, 32, 96, 256)
         ).to(device="cuda")
-        # load pretrained controlnet-openpose params for pose_guider
-        controlnet_openpose_state_dict = torch.load(cfg.controlnet_openpose_path)
-        state_dict_to_load = {}
-        for k in controlnet_openpose_state_dict.keys():
-            if k.startswith("controlnet_cond_embedding.") and k.find("conv_out") < 0:
-                new_k = k.replace("controlnet_cond_embedding.", "")
-                state_dict_to_load[new_k] = controlnet_openpose_state_dict[k]
-        miss, _ = pose_guider.load_state_dict(state_dict_to_load, strict=False)
-        logger.info(f"Missing key for pose guider: {len(miss)}")
+        # # load pretrained controlnet-openpose params for pose_guider
+        # controlnet_openpose_state_dict = torch.load(cfg.controlnet_openpose_path)
+        # state_dict_to_load = {}
+        # for k in controlnet_openpose_state_dict.keys():
+        #     if k.startswith("controlnet_cond_embedding.") and k.find("conv_out") < 0:
+        #         new_k = k.replace("controlnet_cond_embedding.", "")
+        #         state_dict_to_load[new_k] = controlnet_openpose_state_dict[k]
+        # miss, _ = pose_guider.load_state_dict(state_dict_to_load, strict=False)
+        # logger.info(f"Missing key for pose guider: {len(miss)}")
+        pose_guider.load_state_dict(
+            torch.load(cfg.controlnet_openpose_path, map_location="cpu"),strict=False)
     else:
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320,
         ).to(device="cuda")
 
+    # Load pretrained parameters
+    denoising_unet.load_state_dict(
+        torch.load(
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/pretrained_weights/opensource_stage1/denoising_unet-0.pth",
+            map_location="cpu",
+        ),
+        strict=False,
+    )
+    reference_unet.load_state_dict(
+        torch.load(
+            "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/pretrained_weights/opensource_stage1/reference_unet-0.pth",
+            map_location="cpu",
+        ),
+        strict=False,
+    )
+    torch.cuda.empty_cache()
     # Freeze
     vae.requires_grad_(False)
     image_enc.requires_grad_(False)
 
     # Explictly declare training models
-    denoising_unet.requires_grad_(True)
+    denoising_unet.requires_grad_(False)
     #  Some top layer parames of reference_unet don't need grad
     for name, param in reference_unet.named_parameters():
         if "up_blocks.3" in name:
             param.requires_grad_(False)
         else:
             param.requires_grad_(True)
-
+    # reference_unet.requires_grad_(False)
     pose_guider.requires_grad_(True)
 
     reference_control_writer = ReferenceAttentionControl(
@@ -396,7 +428,11 @@ def main(cfg):
         sample_margin=cfg.data.sample_margin,
     )
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=cfg.data.train_bs, shuffle=True, num_workers=4
+        train_dataset, 
+        batch_size=cfg.data.train_bs, 
+        shuffle=True, 
+        num_workers=1,
+        drop_last=True
     )
 
     # Prepare everything with our `accelerator`.
@@ -616,7 +652,7 @@ def main(cfg):
                 if global_step % cfg.checkpointing_steps == 0:
                     if accelerator.is_main_process:
                         save_path = os.path.join(save_dir, f"checkpoint-{global_step}")
-                        delete_additional_ckpt(save_dir, 1)
+                        delete_additional_ckpt(save_dir, 10)
                         accelerator.save_state(save_path)
 
                 if global_step % cfg.val.validation_steps == 0:
@@ -633,16 +669,32 @@ def main(cfg):
                             width=cfg.data.train_width,
                             height=cfg.data.train_height,
                         )
+                        
+                        # reset do_classifier_free_guidence
+                        reference_control_writer = ReferenceAttentionControl(
+                            reference_unet,
+                            do_classifier_free_guidance=False,
+                            mode="write",
+                            fusion_blocks="full",
+                        )
+                        reference_control_reader = ReferenceAttentionControl(
+                            denoising_unet,
+                            do_classifier_free_guidance=False,
+                            mode="read",
+                            fusion_blocks="full",
+                        )
 
                         for sample_id, sample_dict in enumerate(sample_dicts):
                             sample_name = sample_dict["name"]
                             img = sample_dict["img"]
-                            with TemporaryDirectory() as temp_dir:
-                                out_file = Path(
-                                    f"{temp_dir}/{global_step:06d}-{sample_name}.gif"
-                                )
-                                img.save(out_file)
-                                mlflow.log_artifact(out_file)
+                            validation_file = f"{validation_dir}/{global_step:06d}-{sample_name}.gif"
+                            img.save(validation_file)
+                            # with TemporaryDirectory() as temp_dir:
+                            #     out_file = Path(
+                            #         f"{temp_dir}/{global_step:06d}-{sample_name}.gif"
+                            #     )
+                            #     img.save(out_file)
+                            #     mlflow.log_artifact(out_file)
 
             logs = {
                 "step_loss": loss.detach().item(),
@@ -663,21 +715,21 @@ def main(cfg):
                 save_dir,
                 "reference_unet",
                 global_step,
-                total_limit=3,
+                total_limit=10,
             )
-            save_checkpoint(
-                unwrap_net.denoising_unet,
-                save_dir,
-                "denoising_unet",
-                global_step,
-                total_limit=3,
-            )
+            # save_checkpoint(
+            #     unwrap_net.denoising_unet,
+            #     save_dir,
+            #     "denoising_unet",
+            #     global_step,
+            #     total_limit=10,
+            # )
             save_checkpoint(
                 unwrap_net.pose_guider,
                 save_dir,
                 "pose_guider",
                 global_step,
-                total_limit=3,
+                total_limit=10,
             )
 
     # Create the pipeline using the trained modules and save it.

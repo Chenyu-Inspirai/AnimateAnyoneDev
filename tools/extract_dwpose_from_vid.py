@@ -1,6 +1,7 @@
 import concurrent.futures
 import os
 import random
+import torch
 from pathlib import Path
 
 import numpy as np
@@ -62,8 +63,9 @@ if __name__ == "__main__":
         save_dir = args.save_dir
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "7")
     gpu_ids = [int(id) for id in range(len(cuda_visible_devices.split(",")))]
+    # gpu_ids = [0,1,2,3]
     print(f"avaliable gpu ids: {gpu_ids}")
 
     # collect all video_folder paths

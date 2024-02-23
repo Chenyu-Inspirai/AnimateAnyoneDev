@@ -37,6 +37,7 @@ class AnimateController:
         width=512,
         height=768,
         length=24,
+        batch_frames_slider=24,
         num_inference_steps=25,
         cfg=3.5,
         seed=123,
@@ -117,6 +118,7 @@ class AnimateController:
             num_inference_steps=num_inference_steps,
             guidance_scale=cfg,
             generator=generator,
+            context_frames=batch_frames_slider
         ).videos
 
         ref_image_tensor = pose_transform(ref_image)  # (c, h, w)
@@ -124,10 +126,10 @@ class AnimateController:
         ref_image_tensor = repeat(
             ref_image_tensor, "b c f h w -> b c (repeat f) h w", repeat=length
         )
-        pose_tensor = torch.stack(pose_tensor_list, dim=0)  # (f, c, h, w)
-        pose_tensor = pose_tensor.transpose(0, 1)
-        pose_tensor = pose_tensor.unsqueeze(0)
-        video = torch.cat([ref_image_tensor, pose_tensor, video], dim=0)
+        # pose_tensor = torch.stack(pose_tensor_list, dim=0)  # (f, c, h, w)
+        # pose_tensor = pose_tensor.transpose(0, 1)
+        # pose_tensor = pose_tensor.unsqueeze(0)
+        video = torch.cat([ref_image_tensor, video], dim=0)
 
         save_dir = f"./output/gradio"
         if not os.path.exists(save_dir):
@@ -135,10 +137,11 @@ class AnimateController:
         date_str = datetime.now().strftime("%Y%m%d")
         time_str = datetime.now().strftime("%H%M")
         out_path = os.path.join(save_dir, f"{date_str}T{time_str}.mp4")
+        print(out_path)
         save_videos_grid(
             video,
             out_path,
-            n_rows=3,
+            n_rows=2,
             fps=src_fps,
         )
 
@@ -172,13 +175,16 @@ def ui():
 
             with gr.Column():
                 width_slider = gr.Slider(
-                    label="Width", minimum=448, maximum=768, value=512, step=64
+                    label="Width", minimum=320, maximum=1024, value=512, step=64
                 )
                 height_slider = gr.Slider(
                     label="Height", minimum=512, maximum=1024, value=768, step=64
                 )
                 length_slider = gr.Slider(
-                    label="Video Length", minimum=24, maximum=128, value=24, step=24
+                    label="Video Length", minimum=8, maximum=960, value=16, step=8
+                )
+                batch_frames_slider = gr.Slider(
+                    label="context Length", minimum=8, maximum=64, value=8, step=8
                 )
                 with gr.Row():
                     seed_textbox = gr.Textbox(label="Seed", value=-1)
@@ -228,6 +234,7 @@ def ui():
                 width_slider,
                 height_slider,
                 length_slider,
+                batch_frames_slider,
                 sampling_steps,
                 guidance_scale,
                 seed_textbox,

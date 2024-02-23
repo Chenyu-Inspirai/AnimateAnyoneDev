@@ -4,6 +4,10 @@ output/
 .venv/
 mlruns/
 data/
+stage1_out/
+stage2_out/
+assets/
+backgrounds/
 
 *.pth
 *.pt

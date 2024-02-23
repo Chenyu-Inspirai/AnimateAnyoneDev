@@ -19,7 +19,7 @@ from . import util
 from .wholebody import Wholebody
 
 
-def draw_pose(pose, H, W):
+def draw_pose(pose, H, W, face=True):
     bodies = pose["bodies"]
     faces = pose["faces"]
     hands = pose["hands"]
@@ -31,7 +31,8 @@ def draw_pose(pose, H, W):
 
     canvas = util.draw_handpose(canvas, hands)
 
-    canvas = util.draw_facepose(canvas, faces)
+    if face == True:
+        canvas = util.draw_facepose(canvas, faces)
 
     return canvas
 
@@ -65,6 +66,7 @@ class DWposeDetector:
         detect_resolution=512,
         image_resolution=512,
         output_type="pil",
+        face=True,
         **kwargs,
     ):
         input_image = cv2.cvtColor(
@@ -72,7 +74,7 @@ class DWposeDetector:
         )
 
         input_image = HWC3(input_image)
-        input_image = resize_image(input_image, detect_resolution)
+        # input_image = resize_image(input_image, detect_resolution)
         H, W, C = input_image.shape
         with torch.no_grad():
             candidate, subset = self.pose_estimation(input_image)
@@ -107,17 +109,23 @@ class DWposeDetector:
             bodies = dict(candidate=body, subset=score)
             pose = dict(bodies=bodies, hands=hands, faces=faces)
 
-            detected_map = draw_pose(pose, H, W)
+            
+            detected_map = draw_pose(pose, H, W, face)
             detected_map = HWC3(detected_map)
 
-            img = resize_image(input_image, image_resolution)
-            H, W, C = img.shape
+            # img = resize_image(input_image, image_resolution)
+            # H, W, C = img.shape
 
             detected_map = cv2.resize(
                 detected_map, (W, H), interpolation=cv2.INTER_LINEAR
             )
 
+                        
             if output_type == "pil":
                 detected_map = Image.fromarray(detected_map)
+
+            if output_type== "key_points":
+                detected_map = Image.fromarray(detected_map)
+                return detected_map, body_score, pose
 
             return detected_map, body_score

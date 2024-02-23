@@ -19,6 +19,7 @@ if args.meta_info_name is None:
     args.meta_info_name = args.dataset_name
 
 pose_dir = args.root_path + "_dwpose"
+matt_dir = args.root_path + "_matt"
 
 # collect all video_folder paths
 video_mp4_paths = set()
@@ -32,6 +33,9 @@ meta_infos = []
 for video_mp4_path in video_mp4_paths:
     relative_video_name = os.path.relpath(video_mp4_path, args.root_path)
     kps_path = os.path.join(pose_dir, relative_video_name)
-    meta_infos.append({"video_path": video_mp4_path, "kps_path": kps_path})
+    matt_path = "does_not_have_matt"
+    if os.path.exists(os.path.join(matt_dir, relative_video_name)):
+        matt_path = os.path.join(matt_dir, relative_video_name)
+    meta_infos.append({"video_path": video_mp4_path, "kps_path": kps_path, "matt_path":matt_path})
 
 json.dump(meta_infos, open(f"./data/{args.meta_info_name}_meta.json", "w"))
