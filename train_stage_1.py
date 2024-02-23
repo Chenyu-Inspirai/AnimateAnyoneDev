@@ -1,6 +1,7 @@
 import argparse
 import logging
 import math
+from operator import pos
 import os
 import os.path as osp
 import random
@@ -24,6 +25,7 @@ from diffusers import AutoencoderKL, DDIMScheduler
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
+from diffusers.models.controlnet import ControlNetModel
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm.auto import tqdm
@@ -37,6 +39,7 @@ from src.models.unet_2d_condition import UNet2DConditionModel
 from src.models.unet_3d import UNet3DConditionModel
 from src.pipelines.pipeline_pose2img import Pose2ImagePipeline
 from src.utils.util import delete_additional_ckpt, import_filename, seed_everything
+from einops import rearrange
 
 warnings.filterwarnings("ignore")
 
@@ -51,7 +54,7 @@ class Net(nn.Module):
         self,
         reference_unet: UNet2DConditionModel,
         denoising_unet: UNet3DConditionModel,
-        pose_guider: PoseGuider,
+        pose_guider: ControlNetModel,
         reference_control_writer,
         reference_control_reader,
     ):
@@ -71,9 +74,21 @@ class Net(nn.Module):
         pose_img,
         uncond_fwd: bool = False,
     ):
+        # We use a full size controlNet instead of mini-pose guider, so this part was modified a lot
         pose_cond_tensor = pose_img.to(device="cuda")
-        pose_fea = self.pose_guider(pose_cond_tensor)
+        b, c, f, h, w = noisy_latents.shape
+        controlnet_latent_input = rearrange(noisy_latents, "b c f h w -> (b f) c h w")
 
+        pixel_values_pose = rearrange(pose_cond_tensor, "b c f h w -> (b f) c h w")
+        
+        down_block_res_samples, mid_block_res_sample = self.pose_guider(
+            sample=controlnet_latent_input,
+            timestep=timesteps,
+            encoder_hidden_states=clip_image_embeds,
+            controlnet_cond=pixel_values_pose,
+            return_dict=False    
+        )
+          
         if not uncond_fwd:
             ref_timesteps = torch.zeros_like(timesteps)
             self.reference_unet(
@@ -87,7 +102,9 @@ class Net(nn.Module):
         model_pred = self.denoising_unet(
             noisy_latents,
             timesteps,
-            pose_cond_fea=pose_fea,
+            # pose_cond_fea=pose_fea,
+            down_block_additional_residuals=down_block_res_samples,
+            mid_block_additional_residual=mid_block_res_sample,
             encoder_hidden_states=clip_image_embeds,
         ).sample
 
@@ -274,7 +291,6 @@ def main(cfg):
     vae = AutoencoderKL.from_pretrained(cfg.vae_model_path).to(
         "cuda", dtype=weight_dtype
     )
-
     reference_unet = UNet2DConditionModel.from_pretrained(
         cfg.base_model_path,
         subfolder="unet",
@@ -294,21 +310,11 @@ def main(cfg):
         cfg.image_encoder_path,
     ).to(dtype=weight_dtype, device="cuda")
 
+    # Load a pre-trained contorlNet model
     if cfg.pose_guider_pretrain:
-        pose_guider = PoseGuider(
-            conditioning_embedding_channels=320, block_out_channels=(16, 32, 96, 256)
-        ).to(device="cuda")
-        # # load pretrained controlnet-openpose params for pose_guider
-        # controlnet_openpose_state_dict = torch.load(cfg.controlnet_openpose_path)
-        # state_dict_to_load = {}
-        # for k in controlnet_openpose_state_dict.keys():
-        #     if k.startswith("controlnet_cond_embedding.") and k.find("conv_out") < 0:
-        #         new_k = k.replace("controlnet_cond_embedding.", "")
-        #         state_dict_to_load[new_k] = controlnet_openpose_state_dict[k]
-        # miss, _ = pose_guider.load_state_dict(state_dict_to_load, strict=False)
-        # logger.info(f"Missing key for pose guider: {len(miss)}")
-        pose_guider.load_state_dict(
-            torch.load(cfg.controlnet_openpose_path, map_location="cpu"),strict=False)
+        pose_guider = ControlNetModel.from_pretrained(
+            cfg.controlnet_openpose_path
+        )
     else:
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320,
@@ -370,6 +376,7 @@ def main(cfg):
         if is_xformers_available():
             reference_unet.enable_xformers_memory_efficient_attention()
             denoising_unet.enable_xformers_memory_efficient_attention()
+            pose_guider.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError(
                 "xformers is not available. Make sure it is installed correctly"
@@ -476,6 +483,7 @@ def main(cfg):
     )
 
     logger.info("***** Running training *****")
+    logger.info(f"  Num Trainable parames = {len(trainable_params)}")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {cfg.data.train_bs}")

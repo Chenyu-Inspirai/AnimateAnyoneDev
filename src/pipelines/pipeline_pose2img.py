@@ -285,10 +285,6 @@ class Pose2ImagePipeline(DiffusionPipeline):
         pose_cond_tensor = pose_cond_tensor.to(
             device=device, dtype=self.pose_guider.dtype
         )
-        pose_fea = self.pose_guider(pose_cond_tensor)
-        pose_fea = (
-            torch.cat([pose_fea] * 2) if do_classifier_free_guidance else pose_fea
-        )
 
         # denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -304,6 +300,9 @@ class Pose2ImagePipeline(DiffusionPipeline):
                         encoder_hidden_states=image_prompt_embeds,
                         return_dict=False,
                     )
+                    
+                    
+            
 
                     # 2. Update reference unet feature into denosing net
                     reference_control_reader.update(reference_control_writer)
@@ -315,12 +314,25 @@ class Pose2ImagePipeline(DiffusionPipeline):
                 latent_model_input = self.scheduler.scale_model_input(
                     latent_model_input, t
                 )
+                
+                
+                control_model_input = latent_model_input
+                
+                down_block_res_samples, mid_block_res_sample = self.pose_guider(
+                        control_model_input,
+                        t,
+                        encoder_hidden_states=image_prompt_embeds,
+                        controlnet_cond=pose_cond_tensor,
+                        return_dict=False,
+                )
+                
 
                 noise_pred = self.denoising_unet(
                     latent_model_input,
                     t,
                     encoder_hidden_states=image_prompt_embeds,
-                    pose_cond_fea=pose_fea,
+                    down_block_additional_residuals=down_block_res_samples,
+                    mid_block_additional_residual=mid_block_res_sample,
                     return_dict=False,
                 )[0]
 
