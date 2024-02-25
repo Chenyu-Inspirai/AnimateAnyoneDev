@@ -404,6 +404,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         attention_mask: Optional[torch.Tensor] = None,
         down_block_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         mid_block_additional_residual: Optional[torch.Tensor] = None,
+        down_intrablock_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         return_dict: bool = True,
     ) -> Union[UNet3DConditionOutput, Tuple]:
         r"""
@@ -490,11 +491,18 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                 hasattr(downsample_block, "has_cross_attention")
                 and downsample_block.has_cross_attention
             ):
+                additional_residuals = {}
+                if len(down_intrablock_additional_residuals) > 0:
+                    additional_residuals[
+                        "additional_residuals"
+                    ] = down_intrablock_additional_residuals.pop(0)
+                    
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
+                    **additional_residuals,
                 )
             else:
                 sample, res_samples = downsample_block(
@@ -502,6 +510,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+                if len(down_intrablock_additional_residuals) > 0:
+                    sample += down_intrablock_additional_residuals.pop(0).unsqueeze(2)
 
             down_block_res_samples += res_samples
 

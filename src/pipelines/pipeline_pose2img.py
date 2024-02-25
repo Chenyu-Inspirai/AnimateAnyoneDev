@@ -289,6 +289,10 @@ class Pose2ImagePipeline(DiffusionPipeline):
         # denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
+            pixel_values_pose = rearrange(pose_cond_tensor, "b c f h w -> (b f) c h w")
+            adapter_state = self.pose_guider(
+                        pixel_values_pose
+                )
             for i, t in enumerate(timesteps):
                 # 1. Forward reference image
                 if i == 0:
@@ -300,7 +304,6 @@ class Pose2ImagePipeline(DiffusionPipeline):
                         encoder_hidden_states=image_prompt_embeds,
                         return_dict=False,
                     )
-                    
                     
             
 
@@ -315,24 +318,16 @@ class Pose2ImagePipeline(DiffusionPipeline):
                     latent_model_input, t
                 )
                 
-                
-                control_model_input = latent_model_input
-                
-                down_block_res_samples, mid_block_res_sample = self.pose_guider(
-                        control_model_input,
-                        t,
-                        encoder_hidden_states=image_prompt_embeds,
-                        controlnet_cond=pose_cond_tensor,
-                        return_dict=False,
-                )
+                # if do_classifier_free_guidance:
+                #     for k, v in enumerate(adapter_state):
+                #         adapter_state[k] = torch.cat([v] * 2, dim=0)
                 
 
                 noise_pred = self.denoising_unet(
                     latent_model_input,
                     t,
                     encoder_hidden_states=image_prompt_embeds,
-                    down_block_additional_residuals=down_block_res_samples,
-                    mid_block_additional_residual=mid_block_res_sample,
+                    down_intrablock_additional_residuals=[state.clone() for state in adapter_state],
                     return_dict=False,
                 )[0]
 

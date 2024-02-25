@@ -1,14 +1,14 @@
 import argparse
 import logging
 import math
-from operator import pos
+# from operator import pos
 import os
 import os.path as osp
 import random
 import warnings
 from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
+# from pathlib import Path
+# from tempfile import TemporaryDirectory
 
 import diffusers
 import mlflow
@@ -25,7 +25,8 @@ from diffusers import AutoencoderKL, DDIMScheduler
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
-from diffusers.models.controlnet import ControlNetModel
+# from diffusers.models.controlnet import ControlNetModel
+from diffusers.models.adapter import T2IAdapter
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm.auto import tqdm
@@ -54,7 +55,7 @@ class Net(nn.Module):
         self,
         reference_unet: UNet2DConditionModel,
         denoising_unet: UNet3DConditionModel,
-        pose_guider: ControlNetModel,
+        pose_guider: T2IAdapter,
         reference_control_writer,
         reference_control_reader,
     ):
@@ -76,19 +77,13 @@ class Net(nn.Module):
     ):
         # We use a full size controlNet instead of mini-pose guider, so this part was modified a lot
         pose_cond_tensor = pose_img.to(device="cuda")
-        b, c, f, h, w = noisy_latents.shape
-        controlnet_latent_input = rearrange(noisy_latents, "b c f h w -> (b f) c h w")
-
+  
         pixel_values_pose = rearrange(pose_cond_tensor, "b c f h w -> (b f) c h w")
         
-        down_block_res_samples, mid_block_res_sample = self.pose_guider(
-            sample=controlnet_latent_input,
-            timestep=timesteps,
-            encoder_hidden_states=clip_image_embeds,
-            controlnet_cond=pixel_values_pose,
-            return_dict=False    
-        )
-          
+        adapter_state = self.pose_guider(pixel_values_pose)
+        # for k, v in enumerate(adapter_state):
+        #         adapter_state[k] = torch.cat([v] * 2, dim=0)  
+                
         if not uncond_fwd:
             ref_timesteps = torch.zeros_like(timesteps)
             self.reference_unet(
@@ -103,8 +98,7 @@ class Net(nn.Module):
             noisy_latents,
             timesteps,
             # pose_cond_fea=pose_fea,
-            down_block_additional_residuals=down_block_res_samples,
-            mid_block_additional_residual=mid_block_res_sample,
+            down_intrablock_additional_residuals=[state.clone() for state in adapter_state],
             encoder_hidden_states=clip_image_embeds,
         ).sample
 
@@ -312,9 +306,9 @@ def main(cfg):
 
     # Load a pre-trained contorlNet model
     if cfg.pose_guider_pretrain:
-        pose_guider = ControlNetModel.from_pretrained(
+        pose_guider = T2IAdapter.from_pretrained(
             cfg.controlnet_openpose_path
-        )
+        ).to(device="cuda")
     else:
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320,
@@ -348,7 +342,6 @@ def main(cfg):
             param.requires_grad_(False)
         else:
             param.requires_grad_(True)
-    # reference_unet.requires_grad_(False)
     pose_guider.requires_grad_(True)
 
     reference_control_writer = ReferenceAttentionControl(
@@ -773,7 +766,7 @@ def save_checkpoint(model, save_dir, prefix, ckpt_num, total_limit=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./configs/training/stage1.yaml")
+    parser.add_argument("--config", type=str, default="/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/train/stage1.yaml")
     args = parser.parse_args()
 
     if args.config[-5:] == ".yaml":

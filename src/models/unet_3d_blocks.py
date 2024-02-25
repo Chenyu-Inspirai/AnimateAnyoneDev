@@ -401,9 +401,11 @@ class CrossAttnDownBlock3D(nn.Module):
         temb=None,
         encoder_hidden_states=None,
         attention_mask=None,
+        additional_residuals=None,
     ):
         output_states = ()
 
+        blocks = list(zip(self.resnets, self.attentions, self.motion_modules))
         for i, (resnet, attn, motion_module) in enumerate(
             zip(self.resnets, self.attentions, self.motion_modules)
         ):
@@ -452,7 +454,11 @@ class CrossAttnDownBlock3D(nn.Module):
                     if motion_module is not None
                     else hidden_states
                 )
-
+                
+            
+            if i == len(blocks) - 1 and additional_residuals is not None:
+                hidden_states = hidden_states + additional_residuals.unsqueeze(2)
+                
             output_states += (hidden_states,)
 
         if self.downsamplers is not None:
@@ -687,6 +693,7 @@ class CrossAttnUpBlock3D(nn.Module):
         encoder_hidden_states=None,
         upsample_size=None,
         attention_mask=None,
+        additional_residuals = None,
     ):
         for i, (resnet, attn, motion_module) in enumerate(
             zip(self.resnets, self.attentions, self.motion_modules)
