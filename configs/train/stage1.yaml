@@ -8,7 +8,7 @@ data:
   sample_margin: 60
 
 solver:
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
   mixed_precision: 'fp16'
   enable_xformers_memory_efficient_attention: True 
   gradient_checkpointing: False
@@ -28,7 +28,7 @@ solver:
   adam_epsilon: 1.0e-8
 
 val:
-  validation_steps: 500
+  validation_steps: 200
 
 
 noise_scheduler_kwargs:

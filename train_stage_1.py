@@ -773,7 +773,7 @@ def save_checkpoint(model, save_dir, prefix, ckpt_num, total_limit=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./configs/training/stage1.yaml")
+    parser.add_argument("--config", type=str, default="/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/train/stage1.yaml")
     args = parser.parse_args()
 
     if args.config[-5:] == ".yaml":

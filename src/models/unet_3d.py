@@ -512,7 +512,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                 down_block_res_samples, down_block_additional_residuals
             ):
                 down_block_res_sample = (
-                    down_block_res_sample + down_block_additional_residual
+                    down_block_res_sample + down_block_additional_residual.unsqueeze(2)
                 )
                 new_down_block_res_samples += (down_block_res_sample,)
 
@@ -527,7 +527,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         )
 
         if mid_block_additional_residual is not None:
-            sample = sample + mid_block_additional_residual
+            sample = sample + mid_block_additional_residual.unsqueeze(2)
 
         # up
         for i, upsample_block in enumerate(self.up_blocks):
