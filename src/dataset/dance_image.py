@@ -47,7 +47,7 @@ class HumanDanceDataset(Dataset):
                     interpolation=transforms.InterpolationMode.BILINEAR,
                 ),
                 transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
+                # transforms.Normalize([0.5], [0.5]),
             ]
         )
 
@@ -62,6 +62,14 @@ class HumanDanceDataset(Dataset):
                 transforms.ToTensor(),
             ]
         )
+        
+        self.normalize = transforms.Compose(
+            [
+                # transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
 
         self.drop_ratio = drop_ratio
 
@@ -105,7 +113,8 @@ class HumanDanceDataset(Dataset):
         state = torch.get_rng_state()
         tgt_img = self.augmentation(tgt_img_pil, self.transform, state)
         tgt_pose_img = self.augmentation(tgt_pose_pil, self.cond_transform, state)
-        ref_img_vae = self.augmentation(ref_img_pil, self.transform, state)
+        ref_img_raw = self.augmentation(ref_img_pil, self.transform, state)
+        ref_img_vae = self.augmentation(ref_img_raw, self.normalize, state)
         clip_image = self.clip_image_processor(
             images=ref_img_pil, return_tensors="pt"
         ).pixel_values[0]
@@ -116,6 +125,7 @@ class HumanDanceDataset(Dataset):
             tgt_pose=tgt_pose_img,
             ref_img=ref_img_vae,
             clip_images=clip_image,
+            raw_ref_img=ref_img_raw
         )
 
         return sample

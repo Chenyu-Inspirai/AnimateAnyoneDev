@@ -1,14 +1,15 @@
 import argparse
 import logging
 import math
-from operator import pos
+# from operator import pos
 import os
 import os.path as osp
 import random
 import warnings
+import cv2
 from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
+# from pathlib import Path
+# from tempfile import TemporaryDirectory
 
 import diffusers
 import mlflow
@@ -18,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 import transformers
+from insightface.app import FaceAnalysis
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedDataParallelKwargs
@@ -32,8 +34,9 @@ from tqdm.auto import tqdm
 from transformers import CLIPVisionModelWithProjection
 
 from src.dataset.dance_image import HumanDanceDataset
-from src.dwpose import DWposeDetector
+# from src.dwpose import DWposeDetector
 from src.models.mutual_self_attention import ReferenceAttentionControl
+from src.utils.resampler import Resampler
 from src.models.pose_guider import PoseGuider
 from src.models.unet_2d_condition import UNet2DConditionModel
 from src.models.unet_3d import UNet3DConditionModel
@@ -55,6 +58,7 @@ class Net(nn.Module):
         reference_unet: UNet2DConditionModel,
         denoising_unet: UNet3DConditionModel,
         pose_guider: ControlNetModel,
+        image_proj_model,
         reference_control_writer,
         reference_control_reader,
     ):
@@ -62,6 +66,7 @@ class Net(nn.Module):
         self.reference_unet = reference_unet
         self.denoising_unet = denoising_unet
         self.pose_guider = pose_guider
+        self.image_proj_model = image_proj_model
         self.reference_control_writer = reference_control_writer
         self.reference_control_reader = reference_control_reader
 
@@ -72,6 +77,7 @@ class Net(nn.Module):
         ref_image_latents,
         clip_image_embeds,
         pose_img,
+        face_emb_list,
         uncond_fwd: bool = False,
     ):
         # We use a full size controlNet instead of mini-pose guider, so this part was modified a lot
@@ -81,10 +87,18 @@ class Net(nn.Module):
 
         pixel_values_pose = rearrange(pose_cond_tensor, "b c f h w -> (b f) c h w")
         
+        face_image_emb = encode_prompt_image_emb(
+                        image_proj_model=self.image_proj_model, 
+                        prompt_image_emb=face_emb_list.unsqueeze(1), 
+                        device=self.pose_guider.device, 
+                        num_images_per_prompt=1, 
+                        dtype=self.pose_guider.dtype, 
+                        do_classifier_free_guidance=False)
+        
         down_block_res_samples, mid_block_res_sample = self.pose_guider(
             sample=controlnet_latent_input,
             timestep=timesteps,
-            encoder_hidden_states=clip_image_embeds,
+            encoder_hidden_states=face_image_emb,
             controlnet_cond=pixel_values_pose,
             return_dict=False    
         )
@@ -109,6 +123,39 @@ class Net(nn.Module):
         ).sample
 
         return model_pred
+
+def initialize_insightface():
+    # Assuming 'antelopev2' is the model you wish to use
+    app = FaceAnalysis(name='antelopev2', root='/path/to/pretrained_weights', providers=['CUDAExecutionProvider'])
+    # Prepare the model; det_size can be adjusted based on your requirements
+    app.prepare(ctx_id=torch.cuda.current_device(), det_size=(640, 640))
+    return app
+
+
+def encode_prompt_image_emb(image_proj_model, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):
+        
+    if isinstance(prompt_image_emb, torch.Tensor):
+        prompt_image_emb = prompt_image_emb.clone().detach()
+    else:
+        prompt_image_emb = torch.tensor(prompt_image_emb)
+    
+    b_sz = prompt_image_emb.shape[0]
+    prompt_image_emb = prompt_image_emb.reshape([b_sz, -1, 512])
+    
+    if do_classifier_free_guidance:
+        prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb], dim=0)
+    else:
+        prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
+    
+    prompt_image_emb = prompt_image_emb.to(device=image_proj_model.latents.device, 
+                                            dtype=image_proj_model.latents.dtype)
+    prompt_image_emb = image_proj_model(prompt_image_emb)
+
+    bs_embed, seq_len, _ = prompt_image_emb.shape
+    prompt_image_emb = prompt_image_emb.repeat(1, num_images_per_prompt, 1)
+    prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
+    
+    return prompt_image_emb.to(device=device, dtype=dtype)
 
 
 def compute_snr(noise_scheduler, timesteps):
@@ -145,6 +192,7 @@ def log_validation(
     vae,
     image_enc,
     net,
+    app,
     scheduler,
     accelerator,
     width,
@@ -156,6 +204,7 @@ def log_validation(
     reference_unet = ori_net.reference_unet
     denoising_unet = ori_net.denoising_unet
     pose_guider = ori_net.pose_guider
+    image_proj_model = ori_net.image_proj_model
 
     generator = torch.manual_seed(42)
     # cast unet dtype
@@ -171,6 +220,7 @@ def log_validation(
         reference_unet=reference_unet,
         denoising_unet=denoising_unet,
         pose_guider=pose_guider,
+        image_proj_model=image_proj_model,
         scheduler=scheduler,
     )
     pipe = pipe.to(accelerator.device)
@@ -199,10 +249,14 @@ def log_validation(
         ref_name = ref_image_path.split("/")[-1].replace(".png", "")
         ref_image_pil = Image.open(ref_image_path).convert("RGB")
         pose_image_pil = Image.open(pose_image_path).convert("RGB")
+        face_info = app.get(cv2.cvtColor(np.array(ref_image_pil), cv2.COLOR_RGB2BGR))
+        face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*(x['bbox'][3]-x['bbox'][1]))[-1]
+        face_emb_tensor = torch.from_numpy(face_info['embedding']).unsqueeze(0)
 
         image = pipe(
             ref_image_pil,
             pose_image_pil,
+            face_emb_tensor,
             width,
             height,
             20,
@@ -314,7 +368,7 @@ def main(cfg):
     if cfg.pose_guider_pretrain:
         pose_guider = ControlNetModel.from_pretrained(
             cfg.controlnet_openpose_path
-        )
+        ).to(device="cuda")
     else:
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320,
@@ -363,11 +417,30 @@ def main(cfg):
         mode="read",
         fusion_blocks="full",
     )
+    
+    app = FaceAnalysis(name='antelopev2', root='/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/pretrained_weights', providers=[ 'CPUExecutionProvider'])
+    
+    local_rank = accelerator.local_process_index
+    app.prepare(ctx_id=local_rank, det_size=(640, 640))
+    
+    image_proj_model = Resampler(
+            dim=1280,
+            depth=4,
+            dim_head=64,
+            heads=20,
+            num_queries=16,
+            embedding_dim=512,
+            output_dim=768,
+            ff_mult=4,
+        ).to(device="cuda")
+        
+    image_proj_model.requires_grad_(True)
 
     net = Net(
         reference_unet,
         denoising_unet,
         pose_guider,
+        image_proj_model,
         reference_control_writer,
         reference_control_reader,
     )
@@ -377,6 +450,7 @@ def main(cfg):
             reference_unet.enable_xformers_memory_efficient_attention()
             denoising_unet.enable_xformers_memory_efficient_attention()
             pose_guider.enable_xformers_memory_efficient_attention()
+            # image_proj_model.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError(
                 "xformers is not available. Make sure it is installed correctly"
@@ -442,6 +516,7 @@ def main(cfg):
         drop_last=True
     )
 
+    torch.cuda.empty_cache()
     # Prepare everything with our `accelerator`.
     (
         net,
@@ -481,6 +556,7 @@ def main(cfg):
         * accelerator.num_processes
         * cfg.solver.gradient_accumulation_steps
     )
+    
 
     logger.info("***** Running training *****")
     logger.info(f"  Num Trainable parames = {len(trainable_params)}")
@@ -556,10 +632,12 @@ def main(cfg):
                 uncond_fwd = random.random() < cfg.uncond_ratio
                 clip_image_list = []
                 ref_image_list = []
-                for batch_idx, (ref_img, clip_img) in enumerate(
+                face_emb_list = []
+                for batch_idx, (ref_img, clip_img, raw_image) in enumerate(
                     zip(
                         batch["ref_img"],
                         batch["clip_images"],
+                        batch["raw_ref_img"]
                     )
                 ):
                     if uncond_fwd:
@@ -567,6 +645,19 @@ def main(cfg):
                     else:
                         clip_image_list.append(clip_img)
                     ref_image_list.append(ref_img)
+                    
+                    
+                    pil_raw_img = Image.fromarray((np.array((raw_image.cpu().permute(1,2,0))*255)).astype(np.uint8))
+                    # with torch.no_grad():
+                    
+                    face_info = app.get(cv2.cvtColor(np.array(pil_raw_img), cv2.COLOR_RGB2BGR))
+                    
+                    if face_info == []:
+                        continue
+                    
+                    face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*(x['bbox'][3]-x['bbox'][1]))[-1]
+                    
+                    face_emb_list.append(torch.from_numpy(face_info['embedding']))
 
                 with torch.no_grad():
                     ref_img = torch.stack(ref_image_list, dim=0).to(
@@ -584,6 +675,18 @@ def main(cfg):
                         clip_img.to("cuda", dtype=weight_dtype)
                     ).image_embeds
                     image_prompt_embeds = clip_image_embeds.unsqueeze(1)  # (bs, 1, d)
+                    
+                    face_emb = torch.stack(face_emb_list, dim=0).to(
+                        dtype=pose_guider.dtype, device="cuda"
+                    )
+                    
+                    # face_image_emb = encode_prompt_image_emb(
+                    #     image_proj_model=image_proj_model, 
+                    #     prompt_image_emb=face_emb_list, 
+                    #     device='cuda', 
+                    #     num_images_per_prompt=1, 
+                    #     dtype=pose_guider.dtype, 
+                    #     do_classifier_free_guidance=uncond_fwd)
 
                 # add noise
                 noisy_latents = train_noise_scheduler.add_noise(
@@ -608,6 +711,7 @@ def main(cfg):
                     ref_image_latents,
                     image_prompt_embeds,
                     tgt_pose_img,
+                    face_emb,
                     uncond_fwd,
                 )
 
@@ -672,6 +776,7 @@ def main(cfg):
                             vae=vae,
                             image_enc=image_enc,
                             net=net,
+                            app=app,
                             scheduler=val_noise_scheduler,
                             accelerator=accelerator,
                             width=cfg.data.train_width,
@@ -725,13 +830,13 @@ def main(cfg):
                 global_step,
                 total_limit=10,
             )
-            # save_checkpoint(
-            #     unwrap_net.denoising_unet,
-            #     save_dir,
-            #     "denoising_unet",
-            #     global_step,
-            #     total_limit=10,
-            # )
+            save_checkpoint(
+                unwrap_net.image_proj_model,
+                save_dir,
+                "image_proj_model",
+                global_step,
+                total_limit=10,
+            )
             save_checkpoint(
                 unwrap_net.pose_guider,
                 save_dir,

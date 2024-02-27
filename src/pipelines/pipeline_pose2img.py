@@ -5,6 +5,7 @@ from typing import Callable, List, Optional, Union
 import numpy as np
 import torch
 from diffusers import DiffusionPipeline
+import cv2
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.schedulers import (
     DDIMScheduler,
@@ -38,6 +39,7 @@ class Pose2ImagePipeline(DiffusionPipeline):
         reference_unet,
         denoising_unet,
         pose_guider,
+        image_proj_model,
         scheduler: Union[
             DDIMScheduler,
             PNDMScheduler,
@@ -55,6 +57,7 @@ class Pose2ImagePipeline(DiffusionPipeline):
             reference_unet=reference_unet,
             denoising_unet=denoising_unet,
             pose_guider=pose_guider,
+            image_proj_model=image_proj_model,
             scheduler=scheduler,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
@@ -67,6 +70,7 @@ class Pose2ImagePipeline(DiffusionPipeline):
             do_convert_rgb=True,
             do_normalize=False,
         )
+        # self.image_proj_model = image_proj_model
 
     def enable_vae_slicing(self):
         self.vae.enable_slicing()
@@ -135,6 +139,30 @@ class Pose2ImagePipeline(DiffusionPipeline):
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
 
+    def encode_prompt_image_emb(self, prompt_image_emb, device, num_images_per_prompt, dtype, do_classifier_free_guidance):       
+        if isinstance(prompt_image_emb, torch.Tensor):
+            prompt_image_emb = prompt_image_emb.clone().detach()
+        else:
+            prompt_image_emb = torch.tensor(prompt_image_emb)
+            
+        b_sz = prompt_image_emb.shape[0]
+        prompt_image_emb = prompt_image_emb.reshape([b_sz, -1, 512])
+        
+        if do_classifier_free_guidance:
+            prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb], dim=0)
+        else:
+            prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
+        
+        prompt_image_emb = prompt_image_emb.to(device=self.image_proj_model.latents.device, 
+                                                dtype=self.image_proj_model.latents.dtype)
+        prompt_image_emb = self.image_proj_model(prompt_image_emb)
+
+        bs_embed, seq_len, _ = prompt_image_emb.shape
+        prompt_image_emb = prompt_image_emb.repeat(1, num_images_per_prompt, 1)
+        prompt_image_emb = prompt_image_emb.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        
+        return prompt_image_emb.to(device=device, dtype=dtype)
+    
     def prepare_latents(
         self,
         batch_size,
@@ -194,6 +222,7 @@ class Pose2ImagePipeline(DiffusionPipeline):
         self,
         ref_image,
         pose_image,
+        face_emb_tensor,
         width,
         height,
         num_inference_steps,
@@ -285,6 +314,13 @@ class Pose2ImagePipeline(DiffusionPipeline):
         pose_cond_tensor = pose_cond_tensor.to(
             device=device, dtype=self.pose_guider.dtype
         )
+        
+        face_image_emb = self.encode_prompt_image_emb(
+                        prompt_image_emb=face_emb_tensor, 
+                        device=self.pose_guider.device, 
+                        num_images_per_prompt=1, 
+                        dtype=self.pose_guider.dtype, 
+                        do_classifier_free_guidance=do_classifier_free_guidance)
 
         # denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -301,11 +337,25 @@ class Pose2ImagePipeline(DiffusionPipeline):
                         return_dict=False,
                     )
                     
-                    
-            
 
                     # 2. Update reference unet feature into denosing net
                     reference_control_reader.update(reference_control_writer)
+                    
+                    controlnet_latent_input = rearrange(latents, "b c f h w -> (b f) c h w")
+                    
+                    controlnet_latent_input = (
+                        torch.cat([controlnet_latent_input] * 2) if do_classifier_free_guidance else controlnet_latent_input
+                    )
+
+                    pixel_values_pose = rearrange(pose_cond_tensor, "b c f h w -> (b f) c h w")
+                    
+                    down_block_res_samples, mid_block_res_sample = self.pose_guider(
+                            controlnet_latent_input,
+                            t,
+                            encoder_hidden_states=face_image_emb,
+                            controlnet_cond=pixel_values_pose,
+                            return_dict=False,
+                    )
 
                 # 3.1 expand the latents if we are doing classifier free guidance
                 latent_model_input = (
@@ -315,16 +365,6 @@ class Pose2ImagePipeline(DiffusionPipeline):
                     latent_model_input, t
                 )
                 
-                
-                control_model_input = latent_model_input
-                
-                down_block_res_samples, mid_block_res_sample = self.pose_guider(
-                        control_model_input,
-                        t,
-                        encoder_hidden_states=image_prompt_embeds,
-                        controlnet_cond=pose_cond_tensor,
-                        return_dict=False,
-                )
                 
 
                 noise_pred = self.denoising_unet(

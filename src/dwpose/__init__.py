@@ -72,7 +72,7 @@ class DWposeDetector:
         input_image = cv2.cvtColor(
             np.array(input_image, dtype=np.uint8), cv2.COLOR_RGB2BGR
         )
-
+        face=False
         input_image = HWC3(input_image)
         # input_image = resize_image(input_image, detect_resolution)
         H, W, C = input_image.shape

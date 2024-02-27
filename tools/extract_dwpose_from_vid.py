@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_dir", type=str, help="Path to save extracted pose videos"
     )
-    parser.add_argument("-j", type=int, default=4, help="Num workers")
+    parser.add_argument("-j", type=int, default=1, help="Num workers")
     args = parser.parse_args()
     num_workers = args.j
     if args.save_dir is None:
@@ -63,7 +63,7 @@ if __name__ == "__main__":
         save_dir = args.save_dir
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "7")
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
     gpu_ids = [int(id) for id in range(len(cuda_visible_devices.split(",")))]
     # gpu_ids = [0,1,2,3]
     print(f"avaliable gpu ids: {gpu_ids}")
