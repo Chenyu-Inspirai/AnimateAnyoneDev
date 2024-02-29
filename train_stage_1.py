@@ -159,15 +159,15 @@ def log_validation(
     pipe = pipe.to(accelerator.device)
 
     ref_image_paths = [
-        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_on_bed.png",
-        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_on_bed.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_full.jpg",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/ref_image/bella_upper.jpg"
     ]
     pose_image_paths = [
-        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/wake_onbed_0.png",
-        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/wake_onbed_100.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/butt_10.png",
+        "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/butt_20.png",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_160.png",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_180.png",
         "/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/assets/pose_img/kiss_goodbye_190.png"
@@ -299,16 +299,16 @@ def main(cfg):
             conditioning_embedding_channels=320, block_out_channels=(16, 32, 96, 256)
         ).to(device="cuda")
         # # load pretrained controlnet-openpose params for pose_guider
-        # controlnet_openpose_state_dict = torch.load(cfg.controlnet_openpose_path)
-        # state_dict_to_load = {}
-        # for k in controlnet_openpose_state_dict.keys():
-        #     if k.startswith("controlnet_cond_embedding.") and k.find("conv_out") < 0:
-        #         new_k = k.replace("controlnet_cond_embedding.", "")
-        #         state_dict_to_load[new_k] = controlnet_openpose_state_dict[k]
-        # miss, _ = pose_guider.load_state_dict(state_dict_to_load, strict=False)
-        # logger.info(f"Missing key for pose guider: {len(miss)}")
-        pose_guider.load_state_dict(
-            torch.load(cfg.controlnet_openpose_path, map_location="cpu"),strict=False)
+        controlnet_openpose_state_dict = torch.load(cfg.controlnet_openpose_path)
+        state_dict_to_load = {}
+        for k in controlnet_openpose_state_dict.keys():
+            if k.startswith("controlnet_cond_embedding.") and k.find("conv_out") < 0:
+                new_k = k.replace("controlnet_cond_embedding.", "")
+                state_dict_to_load[new_k] = controlnet_openpose_state_dict[k]
+        miss, _ = pose_guider.load_state_dict(state_dict_to_load, strict=False)
+        logger.info(f"Missing key for pose guider: {len(miss)}")
+        # pose_guider.load_state_dict(
+        #     torch.load(cfg.controlnet_openpose_path, map_location="cpu"),strict=False)
     else:
         pose_guider = PoseGuider(
             conditioning_embedding_channels=320,
@@ -765,7 +765,7 @@ def save_checkpoint(model, save_dir, prefix, ckpt_num, total_limit=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./configs/training/stage1.yaml")
+    parser.add_argument("--config", type=str, default="/cephfs/SZ-AI/usr/liuchenyu/HaiLook/Moore-AnimateAnyone/configs/train/stage1.yaml")
     args = parser.parse_args()
 
     if args.config[-5:] == ".yaml":
